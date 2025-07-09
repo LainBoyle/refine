@@ -248,20 +248,37 @@ def add_da_tenure_periods(df):
 
 
 def create_pub_categories(df):
-    pub_categories = (
-        df[["publication", "county", "bay_area"]]
-        .drop_duplicates()
-        .assign(pub_scope=lambda d:
-            np.where(
-                d["county"] == "Outside California", "National",
-                np.where(d["bay_area"].notna(), "Regional", "Local")
-            )
-        )
+    """Create publication category mapping.
+
+    The input data may or may not already contain ``county`` and ``bay_area``
+    columns.  Earlier versions of the pipeline expected these columns to be
+    present, which resulted in a ``KeyError`` when they were missing.  This
+    function now falls back to empty values so that publication categories can
+    be created without raising an exception.
+    """
+
+    if {"county", "bay_area"}.issubset(df.columns):
+        base = df[["Publication", "county", "bay_area"]].drop_duplicates()
+    else:
+        pubs = df["Publication"].drop_duplicates()
+        base = pd.DataFrame({
+            "Publication": pubs,
+            "county": pd.NA,
+            "bay_area": pd.NA,
+        })
+
+    base["pub_scope"] = np.where(
+        base["county"] == "Outside California",
+        "National",
+        np.where(base["bay_area"].notna(), "Regional", "Local"),
     )
-    return pub_categories
+    return base
 
 def merge_news_data(df, pub_categories):
-    df = df.merge(pub_categories, on=["publication", "county", "bay_area"], how="left")
+    """Merge publication metadata with the main dataframe."""
+
+    df = df.merge(pub_categories, on="Publication", how="left")
+
 
     for c in ["county1", "county2", "county3"]:
         df[c] = df[c].str.lower().str.strip()
@@ -277,15 +294,21 @@ def merge_news_data(df, pub_categories):
     )
     
     def covers_home(row):
-        if row["county"] == "San Francisco" and row["is_sf_coverage"]:
+        county = row.get("county")
+        bay_area = row.get("bay_area")
+
+        if pd.notna(county):
+            if county == "San Francisco" and bool(row["is_sf_coverage"]):
+                return True
+            if county == "Alameda" and bool(row["is_alameda_coverage"]):
+                return True
+            if county == "San Mateo" and bool(row["is_san_mateo_coverage"]):
+                return True
+
+        if pd.notna(bay_area):
             return True
-        if row["county"] == "Alameda" and row["is_alameda_coverage"]:
-            return True
-        if row["county"] == "San Mateo" and row["is_san_mateo_coverage"]:
-            return True
-        if pd.notna(row["bay_area"]):
-            return True
-        if row["county"] == "Outside California":
+
+        if pd.notna(county) and county == "Outside California":
             return True
         return False
     
